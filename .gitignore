@@ -1,3 +1,16 @@
 .claude
 .vscode
 11. Randomized Battery Usage Data Set/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated data (large files, regeneratable)
+project/data/
+
+# Model checkpoints and outputs (regeneratable)
+project/results/checkpoints/
+project/results/figures/
+project/results/metrics/

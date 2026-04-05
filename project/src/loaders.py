@@ -1,5 +1,5 @@
 """
-MATLAB .mat file loaders for the NASA Randomized Battery Usage Dataset.
+loaders.py — MATLAB .mat file loaders for the NASA Randomized Battery Usage Dataset.
 
 Supports both MATLAB v5/v7 (via scipy.io) and MATLAB v7.3 HDF5 format
 (via h5py). The public entry point is load_battery_mat(), which tries
@@ -9,7 +9,16 @@ scipy first and falls back to h5py automatically.
 import numpy as np
 import scipy.io as sio
 
-from battery_soh.constants import MAT_STEP_FIELDS
+_MAT_STEP_FIELDS: tuple[str, ...] = (
+    "comment",
+    "type",
+    "relativeTime",
+    "time",
+    "voltage",
+    "current",
+    "temperature",
+    "date",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -53,11 +62,10 @@ def _decode_hdf5_string(dataset) -> str:
     Decode a string from an HDF5 MATLAB v7.3 dataset.
 
     MATLAB v7.3 stores character arrays as arrays of uint16 code points.
-    This function handles both that case and pre-decoded byte/str values.
+    Handles both that case and pre-decoded byte/str values.
     """
     raw = dataset[...]
     if raw.dtype.kind in ("U", "S"):
-        # Already a string or bytes array
         return str(raw.flat[0]).strip()
     # uint16 char array — join code points
     return "".join(chr(int(c)) for c in raw.flatten()).strip()
@@ -88,7 +96,7 @@ def _load_mat_h5py(mat_path: str) -> list[dict]:
             step_group = f[ref]
             record: dict = {"step_index": i}
 
-            for field in MAT_STEP_FIELDS:
+            for field in _MAT_STEP_FIELDS:
                 if field not in step_group:
                     continue
                 ds = step_group[field]
