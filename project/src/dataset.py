@@ -38,6 +38,22 @@ The remaining 40C group (RW21–24, skewed_low 40C) stays in training so the
 model sees at least one elevated-temperature group during training.
 """
 
+DEFAULT_VAL_BATTERIES: list[str] = [
+    "RW24",  # high-SOH end, 40C skewed-low group
+    "RW15",  # mid-SOH, skewed_low / room_temp
+    "RW9",   # low-SOH / aged, lots of late-life samples
+]
+"""
+Default validation batteries (3 of the 22 train-pool batteries).
+Picked to span the SOH range so early-stopping and LR scheduling respond
+to a distribution that roughly matches the full SOH trajectory:
+  RW24 — high-SOH (mean 88.1%), 40C group
+  RW15 — mid-SOH (mean 75.3%), room-temp skewed_low
+  RW9  — low-SOH (mean 63.2%), heavy aging data
+Leaves 19 batteries for training; all load-distribution × temperature cells
+still represented.
+"""
+
 
 # ---------------------------------------------------------------------------
 # Dataset class
@@ -236,6 +252,152 @@ class BatterySOHDataset(Dataset):
               f"{actual_test}")
 
         return train_indices, test_indices
+
+    @classmethod
+    def create_splits_3way(
+        cls,
+        h5_path: str,
+        val_batteries: Optional[list[str]] = None,
+        test_batteries: Optional[list[str]] = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Create battery-level train/val/test index splits.
+
+        Val and test battery sets are disjoint from train and from each other.
+        Val drives early stopping and LR scheduling; test is held out for final
+        evaluation only.
+
+        Args:
+            h5_path: Path to sequences.h5.
+            val_batteries:  Battery IDs for validation. Defaults to DEFAULT_VAL_BATTERIES.
+            test_batteries: Battery IDs for test.       Defaults to DEFAULT_TEST_BATTERIES.
+
+        Returns:
+            (train_indices, val_indices, test_indices) as int64 numpy arrays.
+        """
+        if val_batteries is None:
+            val_batteries = DEFAULT_VAL_BATTERIES
+        if test_batteries is None:
+            test_batteries = DEFAULT_TEST_BATTERIES
+
+        val_set, test_set = set(val_batteries), set(test_batteries)
+        overlap = val_set & test_set
+        if overlap:
+            raise ValueError(f"val and test battery sets overlap: {overlap}")
+
+        with h5py.File(h5_path, "r") as f:
+            battery_ids = np.array(
+                [b.decode("ascii") for b in f["battery_id"][:]]
+            )
+            n = len(battery_ids)
+
+        all_indices = np.arange(n, dtype=np.int64)
+        in_val = np.isin(battery_ids, list(val_set))
+        in_test = np.isin(battery_ids, list(test_set))
+        in_train = ~(in_val | in_test)
+
+        train_indices = all_indices[in_train]
+        val_indices = all_indices[in_val]
+        test_indices = all_indices[in_test]
+
+        train_bats = sorted(set(battery_ids[in_train].tolist()))
+        val_bats = sorted(set(battery_ids[in_val].tolist()))
+        test_bats = sorted(set(battery_ids[in_test].tolist()))
+
+        # hard guarantee: partitions are disjoint and cover everything
+        assert set(train_bats).isdisjoint(val_bats)
+        assert set(train_bats).isdisjoint(test_bats)
+        assert set(val_bats).isdisjoint(test_bats)
+        assert len(train_indices) + len(val_indices) + len(test_indices) == n
+
+        print(f"Train: {len(train_indices):,} steps from {len(train_bats)} batteries: {train_bats}")
+        print(f"Val:   {len(val_indices):,} steps from {len(val_bats)} batteries: {val_bats}")
+        print(f"Test:  {len(test_indices):,} steps from {len(test_bats)} batteries: {test_bats}")
+
+        return train_indices, val_indices, test_indices
+
+    @classmethod
+    def create_kfold_splits(
+        cls,
+        h5_path: str,
+        k: int = 5,
+        test_batteries: Optional[list[str]] = None,
+        seed: int = 42,
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
+        """
+        Build K grouped cross-validation folds over the train-pool batteries.
+
+        - The 6 test batteries are always excluded from folds — test stays
+          held out for final evaluation across the whole K-fold process.
+        - Remaining batteries are grouped (never split across folds) and
+          stratified by per-battery mean SOH so each fold's val split covers
+          a comparable range. Prevents "fold 0 is all aged, fold 4 is all
+          healthy" skew that would dominate the variance estimate.
+
+        Args:
+            h5_path:        Path to sequences.h5.
+            k:              Number of folds (default 5).
+            test_batteries: Battery IDs to hold out entirely. Defaults to
+                            DEFAULT_TEST_BATTERIES.
+            seed:           Shuffle seed for the round-robin assignment within
+                            each SOH-stratum.
+
+        Returns:
+            List of (train_indices, val_indices) for each of the K folds.
+            Each element's train/val are disjoint at the battery level; test
+            batteries appear in neither.
+        """
+        if test_batteries is None:
+            test_batteries = DEFAULT_TEST_BATTERIES
+
+        with h5py.File(h5_path, "r") as f:
+            battery_ids = np.array([b.decode("ascii") for b in f["battery_id"][:]])
+            y_all = f["y"][:]
+
+        test_set = set(test_batteries)
+        pool = [b for b in sorted(set(battery_ids.tolist())) if b not in test_set]
+
+        # Per-battery mean SOH — used to stratify folds by aging severity.
+        mean_soh = {b: float(y_all[battery_ids == b].mean()) for b in pool}
+        # Sort batteries low→high mean SOH, then assign to folds round-robin
+        # inside a shuffled-within-stratum order. This gives each fold one
+        # battery from each SOH tier, so K-fold val-MAE variance reflects
+        # model stability, not fold-composition luck.
+        rng = np.random.default_rng(seed)
+        ordered = sorted(pool, key=lambda b: mean_soh[b])
+        # Light shuffle *within* each k-sized block to vary fold composition.
+        blocks = [ordered[i : i + k] for i in range(0, len(ordered), k)]
+        for block in blocks:
+            rng.shuffle(block)
+
+        fold_batteries: list[list[str]] = [[] for _ in range(k)]
+        for block in blocks:
+            for i, b in enumerate(block):
+                fold_batteries[i].append(b)
+
+        all_indices = np.arange(len(battery_ids), dtype=np.int64)
+        folds: list[tuple[np.ndarray, np.ndarray]] = []
+        for fi, val_bats in enumerate(fold_batteries):
+            train_bats = [b for b in pool if b not in set(val_bats)]
+            in_val = np.isin(battery_ids, val_bats)
+            in_train = np.isin(battery_ids, train_bats)
+
+            train_idx = all_indices[in_train]
+            val_idx = all_indices[in_val]
+
+            assert set(train_bats).isdisjoint(val_bats)
+            assert set(train_bats).isdisjoint(test_set)
+            assert set(val_bats).isdisjoint(test_set)
+
+            val_mean = np.mean([mean_soh[b] for b in val_bats])
+            print(
+                f"Fold {fi}: val batteries={val_bats} "
+                f"(mean SOH {val_mean:.1f}%, {len(val_idx):,} samples)  "
+                f"train={len(train_idx):,} samples from {len(train_bats)} batteries"
+            )
+            folds.append((train_idx, val_idx))
+
+        return folds
 
 
 # ---------------------------------------------------------------------------

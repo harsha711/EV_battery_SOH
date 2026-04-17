@@ -5,23 +5,23 @@
    "id": "09a38e81",
    "metadata": {},
    "source": [
-    "# Model 3 — Bidirectional LSTM\n",
+    "# Model 3 \u2014 Bidirectional LSTM\n",
     "\n",
-    "**Efficiency strategy:** Preload the full normalized (N, 301, 3) dataset into GPU VRAM once. Batch size raised to 1024 (was 256) — reduces train batches from ~1,372 to ~343 per epoch.\n",
+    "**Efficiency strategy:** Preload the full normalized (N, 301, 3) dataset into GPU VRAM once. Batch size raised to 1024 (was 256) \u2014 reduces train batches from ~1,372 to ~343 per epoch.\n",
     "\n",
     "**Architecture:**\n",
     "```\n",
     "Input (batch, 301, 3)\n",
     "BiLSTM(input=3, hidden=128, layers=2, dropout=0.2)\n",
-    "  → h_n[-2] (forward last layer)  | shape (batch, 128)\n",
-    "  → h_n[-1] (backward last layer) | shape (batch, 128)\n",
-    "  → concat → (batch, 256)\n",
-    "Linear(256→64) → ReLU → Dropout(0.3) → Linear(64→1)\n",
+    "  \u2192 h_n[-2] (forward last layer)  | shape (batch, 128)\n",
+    "  \u2192 h_n[-1] (backward last layer) | shape (batch, 128)\n",
+    "  \u2192 concat \u2192 (batch, 256)\n",
+    "Linear(256\u219264) \u2192 ReLU \u2192 Dropout(0.3) \u2192 Linear(64\u21921)\n",
     "```\n",
     "\n",
     "**Training note:** Gradient clipping at `max_norm=1.0` is applied to stabilize training over 301 timesteps.\n",
     "\n",
-    "**Data:** `data/processed/sequences.h5` — battery-level split: 22 train / 6 test batteries."
+    "**Data:** `data/processed/sequences.h5` \u2014 battery-level split: 22 train / 6 test batteries."
    ]
   },
   {
@@ -70,11 +70,11 @@
     "FIG_DIR      = \"../results/figures\"\n",
     "\n",
     "EPOCHS       = 100\n",
-    "BATCH_SIZE   = 1024   # raised from 256 — full dataset preloaded in VRAM\n",
+    "BATCH_SIZE   = 1024   # raised from 256 \u2014 full dataset preloaded in VRAM\n",
     "LR           = 1e-3\n",
     "WEIGHT_DECAY = 1e-4\n",
     "PATIENCE     = 10\n",
-    "CLIP_GRAD    = 1.0    # gradient clipping — critical for LSTM over 301 timesteps\n",
+    "CLIP_GRAD    = 1.0    # gradient clipping \u2014 critical for LSTM over 301 timesteps\n",
     "RANDOM_SEED  = 42\n",
     "\n",
     "DEVICE = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n",
@@ -83,11 +83,12 @@
     "os.makedirs(os.path.dirname(CKPT_PATH), exist_ok=True)\n",
     "os.makedirs(os.path.dirname(METRICS_PATH), exist_ok=True)\n",
     "\n",
-    "# Reproducibility: seed python/numpy/torch/cuda and set cuDNN deterministic\n",
-    "from src.utils import set_all_seeds\n",
-    "\n",
     "def set_seeds(seed=RANDOM_SEED):\n",
-    "    set_all_seeds(seed, deterministic=True)\n",
+    "    random.seed(seed)\n",
+    "    np.random.seed(seed)\n",
+    "    torch.manual_seed(seed)\n",
+    "    if torch.cuda.is_available():\n",
+    "        torch.cuda.manual_seed_all(seed)\n",
     "\n",
     "set_seeds()"
    ]
@@ -97,7 +98,7 @@
    "id": "afd6898d",
    "metadata": {},
    "source": [
-    "## Section 1 — Data Loading + GPU Preload"
+    "## Section 1 \u2014 Data Loading + GPU Preload"
    ]
   },
   {
@@ -107,7 +108,7 @@
    "metadata": {},
    "outputs": [],
    "source": [
-    "train_idx, val_idx, test_idx = BatterySOHDataset.create_splits_3way(H5_PATH)\n",
+    "train_idx, test_idx = BatterySOHDataset.create_splits(H5_PATH)\n",
     "\n",
     "if not os.path.exists(STATS_PATH):\n",
     "    tmp = BatterySOHDataset(H5_PATH, indices=train_idx, normalize=False)\n",
@@ -134,25 +135,20 @@
     "print(f'done. VRAM: {torch.cuda.memory_allocated() / 1024**2:.1f} MiB')\n",
     "\n",
     "train_idx_t = torch.from_numpy(train_idx)\n",
-    "val_idx_t   = torch.from_numpy(val_idx)\n",
     "test_idx_t  = torch.from_numpy(test_idx)\n",
     "\n",
     "X_train = X_tensor[train_idx_t]\n",
     "y_train = y_tensor[train_idx_t]\n",
-    "X_val   = X_tensor[val_idx_t]\n",
-    "y_val   = y_tensor[val_idx_t]\n",
     "X_test  = X_tensor[test_idx_t]\n",
     "y_test  = y_tensor[test_idx_t]\n",
     "del X_tensor, y_tensor\n",
     "\n",
-    "print(f'Train: {X_train.shape[0]:,}  |  Val: {X_val.shape[0]:,}  |  Test: {X_test.shape[0]:,}')\n",
+    "print(f'Train: {X_train.shape[0]:,}  |  Test: {X_test.shape[0]:,}')\n",
     "print(f'Test batteries: {DEFAULT_TEST_BATTERIES}')\n",
     "print(f'VRAM after split: {torch.cuda.memory_allocated() / 1024**2:.1f} MiB')\n",
     "\n",
     "train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=BATCH_SIZE,\n",
     "                          shuffle=True, num_workers=0)\n",
-    "val_loader   = DataLoader(TensorDataset(X_val,   y_val),   batch_size=BATCH_SIZE,\n",
-    "                          shuffle=False, num_workers=0)\n",
     "test_loader  = DataLoader(TensorDataset(X_test,  y_test),  batch_size=BATCH_SIZE,\n",
     "                          shuffle=False, num_workers=0)\n",
     "\n",
@@ -164,7 +160,7 @@
    "id": "cc2362f8",
    "metadata": {},
    "source": [
-    "## Section 2 — Gradient Clipping Analysis\n",
+    "## Section 2 \u2014 Gradient Clipping Analysis\n",
     "\n",
     "LSTMs over long sequences (301 steps) can suffer from exploding gradients. This cell demonstrates why clipping is needed by logging the gradient norm before and after clipping during the first few steps."
    ]
@@ -222,7 +218,7 @@
    "id": "23ac897c",
    "metadata": {},
    "source": [
-    "## Section 3 — Model Architecture"
+    "## Section 3 \u2014 Model Architecture"
    ]
   },
   {
@@ -248,7 +244,7 @@
     "    out = model(dummy)\n",
     "\n",
     "print(f\"\\nInput:                  {tuple(dummy.shape)}\")\n",
-    "print(f\"h_n (layers×dirs, B, H): {tuple(h_n.shape)}\")\n",
+    "print(f\"h_n (layers\u00d7dirs, B, H): {tuple(h_n.shape)}\")\n",
     "print(f\"h_fwd (last fwd layer): {tuple(h_fwd.shape)}\")\n",
     "print(f\"h_bwd (last bwd layer): {tuple(h_bwd.shape)}\")\n",
     "print(f\"Concatenated hidden:    {tuple(h_last.shape)}\")\n",
@@ -260,7 +256,7 @@
    "id": "b6581738",
    "metadata": {},
    "source": [
-    "## Section 4 — Training"
+    "## Section 4 \u2014 Training"
    ]
   },
   {
@@ -270,34 +266,7 @@
    "metadata": {},
    "outputs": [],
    "source": [
-    "def train_epoch(model, loader, optimizer, criterion, clip_grad=CLIP_GRAD):\n",
-    "    model.train()\n",
-    "    total = 0.0\n",
-    "    bar = tqdm(loader, desc='Training', leave=True, unit='batch')\n",
-    "    for x, y in bar:\n",
-    "        # Data already on GPU\n",
-    "        optimizer.zero_grad(set_to_none=True)\n",
-    "        loss = criterion(model(x).squeeze(1), y)\n",
-    "        loss.backward()\n",
-    "        nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad)\n",
-    "        optimizer.step()\n",
-    "        total += loss.item()\n",
-    "        bar.set_postfix(loss=f'{loss.item():.4f}')\n",
-    "    return total / len(loader)\n",
-    "\n",
-    "@torch.no_grad()\n",
-    "def evaluate(model, loader):\n",
-    "    model.eval()\n",
-    "    preds, targets = [], []\n",
-    "    bar = tqdm(loader, desc='Validating', leave=True, unit='batch')\n",
-    "    for x, y in bar:\n",
-    "        preds.append(model(x).squeeze(1).cpu())\n",
-    "        targets.append(y.cpu())\n",
-    "    preds   = torch.cat(preds).numpy() * 100.0\n",
-    "    targets = torch.cat(targets).numpy() * 100.0\n",
-    "    mae  = float(np.abs(preds - targets).mean())\n",
-    "    rmse = float(math.sqrt(((preds - targets)**2).mean()))\n",
-    "    return mae, rmse, preds, targets"
+    "def train_epoch(model, loader, optimizer, criterion, clip_grad=CLIP_GRAD):\n    model.train()\n    total = 0.0\n    bar = tqdm(loader, desc='Training', leave=True, unit='batch')\n    for x, y in bar:\n        # Data already on GPU\n        optimizer.zero_grad(set_to_none=True)\n        loss = criterion(model(x).squeeze(1), y)\n        loss.backward()\n        nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad)\n        optimizer.step()\n        total += loss.item()\n        bar.set_postfix(loss=f'{loss.item():.4f}')\n    return total / len(loader)\n\n@torch.no_grad()\ndef evaluate(model, loader):\n    model.eval()\n    preds, targets = [], []\n    bar = tqdm(loader, desc='Validating', leave=True, unit='batch')\n    for x, y in bar:\n        preds.append(model(x).squeeze(1).cpu())\n        targets.append(y.cpu())\n    preds   = torch.cat(preds).numpy() * 100.0\n    targets = torch.cat(targets).numpy() * 100.0\n    mae  = float(np.abs(preds - targets).mean())\n    rmse = float(math.sqrt(((preds - targets)**2).mean()))\n    return mae, rmse, preds, targets"
    ]
   },
   {
@@ -307,57 +276,7 @@
    "metadata": {},
    "outputs": [],
    "source": [
-    "set_seeds()\n",
-    "model = SOHLSTM().to(DEVICE)\n",
-    "optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)\n",
-    "scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode=\"min\", patience=5, factor=0.5, min_lr=1e-6)\n",
-    "criterion = nn.MSELoss()\n",
-    "\n",
-    "history    = {\"train_loss\": [], \"val_mae\": [], \"val_rmse\": []}\n",
-    "best_val_mae = float(\"inf\")\n",
-    "no_improve   = 0\n",
-    "\n",
-    "print(f'Batch size: {BATCH_SIZE}  |  Train batches/epoch: {len(train_loader)}')\n",
-    "print(f'VRAM before training: {torch.cuda.memory_allocated() / 1024**2:.1f} MiB')\n",
-    "\n",
-    "for epoch in range(1, EPOCHS + 1):\n",
-    "    print(f'\\n{\"=\"*60}')\n",
-    "    print(f'Epoch {epoch}/{EPOCHS}')\n",
-    "    print(f'{\"=\"*60}')\n",
-    "\n",
-    "    train_loss = train_epoch(model, train_loader, optimizer, criterion)\n",
-    "    val_mae, val_rmse, _, _ = evaluate(model, val_loader)\n",
-    "    scheduler.step(val_mae)\n",
-    "\n",
-    "    history[\"train_loss\"].append(train_loss)\n",
-    "    history[\"val_mae\"].append(val_mae)\n",
-    "    history[\"val_rmse\"].append(val_rmse)\n",
-    "\n",
-    "    lr_now = optimizer.param_groups[0]['lr']\n",
-    "    vram   = torch.cuda.memory_allocated() / 1024**2\n",
-    "\n",
-    "    print(f'\\nTrain Loss: {train_loss:.4f}')\n",
-    "    print(f'Val MAE:    {val_mae:.4f}%')\n",
-    "    print(f'Val RMSE:   {val_rmse:.4f}%')\n",
-    "    print(f'LR:         {lr_now:.6f}')\n",
-    "    print(f'VRAM:       {vram:.0f} MiB')\n",
-    "\n",
-    "    if val_mae < best_val_mae:\n",
-    "        best_val_mae = val_mae\n",
-    "        no_improve   = 0\n",
-    "        torch.save({\"epoch\": epoch, \"val_mae\": val_mae,\n",
-    "                    \"model_state_dict\": model.state_dict()}, CKPT_PATH)\n",
-    "        print(f'Model saved to {CKPT_PATH}')\n",
-    "        print('✓ New best model saved!')\n",
-    "    else:\n",
-    "        no_improve += 1\n",
-    "        if no_improve >= PATIENCE:\n",
-    "            print(f'Early stopping at epoch {epoch}.')\n",
-    "            break\n",
-    "\n",
-    "with open(METRICS_PATH, \"w\") as f:\n",
-    "    json.dump(history, f, indent=2)\n",
-    "print(f'\\nBest val MAE: {best_val_mae:.4f}%  |  Checkpoint: {CKPT_PATH}')"
+    "set_seeds()\nmodel = SOHLSTM().to(DEVICE)\noptimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)\nscheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode=\"min\", patience=5, factor=0.5)\ncriterion = nn.MSELoss()\n\nhistory    = {\"train_loss\": [], \"val_mae\": [], \"val_rmse\": []}\nbest_val_mae = float(\"inf\")\nno_improve   = 0\n\nprint(f'Batch size: {BATCH_SIZE}  |  Train batches/epoch: {len(train_loader)}')\nprint(f'VRAM before training: {torch.cuda.memory_allocated() / 1024**2:.1f} MiB')\n\nfor epoch in range(1, EPOCHS + 1):\n    print(f'\\n{\"=\"*60}')\n    print(f'Epoch {epoch}/{EPOCHS}')\n    print(f'{\"=\"*60}')\n\n    train_loss = train_epoch(model, train_loader, optimizer, criterion)\n    val_mae, val_rmse, _, _ = evaluate(model, test_loader)\n    scheduler.step(val_mae)\n\n    history[\"train_loss\"].append(train_loss)\n    history[\"val_mae\"].append(val_mae)\n    history[\"val_rmse\"].append(val_rmse)\n\n    lr_now = optimizer.param_groups[0]['lr']\n    vram   = torch.cuda.memory_allocated() / 1024**2\n\n    print(f'\\nTrain Loss: {train_loss:.4f}')\n    print(f'Val MAE:    {val_mae:.4f}%')\n    print(f'Val RMSE:   {val_rmse:.4f}%')\n    print(f'LR:         {lr_now:.6f}')\n    print(f'VRAM:       {vram:.0f} MiB')\n\n    if val_mae < best_val_mae:\n        best_val_mae = val_mae\n        no_improve   = 0\n        torch.save({\"epoch\": epoch, \"val_mae\": val_mae,\n                    \"model_state_dict\": model.state_dict()}, CKPT_PATH)\n        print(f'Model saved to {CKPT_PATH}')\n        print('\u2713 New best model saved!')\n    else:\n        no_improve += 1\n        if no_improve >= PATIENCE:\n            print(f'Early stopping at epoch {epoch}.')\n            break\n\nwith open(METRICS_PATH, \"w\") as f:\n    json.dump(history, f, indent=2)\nprint(f'\\nBest val MAE: {best_val_mae:.4f}%  |  Checkpoint: {CKPT_PATH}')"
    ]
   },
   {
@@ -365,7 +284,7 @@
    "id": "c8a646a6",
    "metadata": {},
    "source": [
-    "## Section 5 — Results"
+    "## Section 5 \u2014 Results"
    ]
   },
   {
@@ -402,7 +321,7 @@
     "axes[1].set_xlabel(\"Epoch\"); axes[1].set_ylabel(\"SOH%\")\n",
     "axes[1].set_title(\"Validation Metrics\"); axes[1].legend(); axes[1].grid(alpha=0.3)\n",
     "\n",
-    "fig.suptitle(\"Bidirectional LSTM — Training Curves\", fontsize=13, fontweight=\"bold\")\n",
+    "fig.suptitle(\"Bidirectional LSTM \u2014 Training Curves\", fontsize=13, fontweight=\"bold\")\n",
     "fig.tight_layout()\n",
     "fig.savefig(os.path.join(FIG_DIR, \"lstm_training_curves.png\"), dpi=150)\n",
     "plt.show()"
@@ -433,7 +352,7 @@
     "axes[1].set_title(f\"Error Distribution  std={errors.std():.2f}%\")\n",
     "axes[1].legend(); axes[1].grid(axis=\"y\", alpha=0.3)\n",
     "\n",
-    "fig.suptitle(\"Bidirectional LSTM — Test Set Results\", fontsize=13, fontweight=\"bold\")\n",
+    "fig.suptitle(\"Bidirectional LSTM \u2014 Test Set Results\", fontsize=13, fontweight=\"bold\")\n",
     "fig.tight_layout()\n",
     "fig.savefig(os.path.join(FIG_DIR, \"lstm_results.png\"), dpi=150)\n",
     "plt.show()"
@@ -461,9 +380,9 @@
     "fig, ax = plt.subplots(figsize=(14, 5))\n",
     "im = ax.imshow(h_sorted.T, aspect=\"auto\", cmap=\"RdBu_r\",\n",
     "               vmin=-2, vmax=2, interpolation=\"nearest\")\n",
-    "ax.set_xlabel(f\"Sample (sorted by SOH, {soh_sorted[0]:.1f}% → {soh_sorted[-1]:.1f}%)\")\n",
+    "ax.set_xlabel(f\"Sample (sorted by SOH, {soh_sorted[0]:.1f}% \u2192 {soh_sorted[-1]:.1f}%)\")\n",
     "ax.set_ylabel(\"Hidden unit index (128 forward units)\")\n",
-    "ax.set_title(\"LSTM Hidden State Magnitude at Sequence End — Forward Direction\")\n",
+    "ax.set_title(\"LSTM Hidden State Magnitude at Sequence End \u2014 Forward Direction\")\n",
     "plt.colorbar(im, ax=ax, label=\"Activation\")\n",
     "fig.tight_layout()\n",
     "fig.savefig(os.path.join(FIG_DIR, \"lstm_hidden_states.png\"), dpi=150)\n",
@@ -478,7 +397,7 @@
    "outputs": [],
    "source": [
     "print(\"=\" * 40)\n",
-    "print(\"BIDIRECTIONAL LSTM — FINAL SUMMARY\")\n",
+    "print(\"BIDIRECTIONAL LSTM \u2014 FINAL SUMMARY\")\n",
     "print(\"=\" * 40)\n",
     "print(f\"Parameters : {sum(p.numel() for p in model.parameters() if p.requires_grad):,}\")\n",
     "print(f\"Batch size : {BATCH_SIZE}  (batches/epoch: {len(train_loader)})\")\n",
