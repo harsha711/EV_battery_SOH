@@ -21,6 +21,3 @@ dependencies:
           - jupyter_client
           - seaborn
           - tqdm
-          - transformers
-          - datasets
-          - huggingface-hub
