@@ -232,11 +232,16 @@ class HybridDataset(Dataset):
             n_avail = len(rows)
             if n_avail >= K:
                 pick = rng.choice(n_avail, size=K, replace=False)
+                sampled_rows = np.sort(rows[pick])
+                out[w] = self._file["X"][sampled_rows.tolist()]
             else:
-                # Sample with replacement when block has fewer than K steps
-                pick = rng.choice(n_avail, size=K, replace=True)
-            sampled_rows = np.sort(rows[pick])   # HDF5 fancy indexing wants sorted
-            out[w] = self._file["X"][sampled_rows.tolist()]
+                # Block has fewer than K steps. Read each unique row once
+                # (h5py requires strictly increasing indices, no duplicates),
+                # then expand to K with replacement in numpy.
+                unique_rows = np.sort(rows)
+                unique_data = self._file["X"][unique_rows.tolist()]   # (n_avail, 301, 3)
+                pick = rng.integers(0, n_avail, size=K)
+                out[w] = unique_data[pick]
 
         if self.normalize:
             out = (out - self.norm_mean) / (self.norm_std + 1e-8)
