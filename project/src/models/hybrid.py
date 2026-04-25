@@ -46,17 +46,16 @@ def _conv_block(in_ch: int, out_ch: int, kernel_size: int) -> nn.Sequential:
 
 
 class CNNStepEncoder(nn.Module):
-    """Encodes a single (301, 3) step into a 128-dim embedding.
+    """Encodes a single (301, 3) step into a (base_filters * 4)-dim embedding.
 
     Same architecture as cnn1d.py but exposes the pooled embedding instead of
-    a scalar. Operates on (batch, 301, 3) and returns (batch, 128).
+    a scalar. Operates on (batch, 301, 3) and returns (batch, base_filters*4).
     """
-
-    EMBED_DIM: int = 128
 
     def __init__(self, in_channels: int = 3, base_filters: int = 32) -> None:
         super().__init__()
         f = base_filters
+        self.embed_dim = f * 4
         self.conv1 = _conv_block(in_channels, f, kernel_size=7)
         self.pool1 = nn.MaxPool1d(2)
         self.conv2 = _conv_block(f, f * 2, kernel_size=5)
@@ -102,7 +101,7 @@ class SOHHybrid(nn.Module):
         self.k_steps = k_steps
 
         self.encoder = CNNStepEncoder(in_channels=3, base_filters=cnn_filters)
-        embed_dim = self.encoder.EMBED_DIM   # 128
+        embed_dim = self.encoder.embed_dim   # = cnn_filters * 4
 
         self.gru = nn.GRU(
             input_size=embed_dim,
