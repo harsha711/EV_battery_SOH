@@ -94,6 +94,11 @@ class HybridDataset(Dataset):
         deterministic:  If True, use a fixed seed per __getitem__ so step
                         sampling is reproducible (used for val/test).
         seed:           Base seed for deterministic sampling.
+        preloaded_X:    Optional in-memory copy of the full X dataset
+                        (numpy array, shape matching sequences.h5 X). When
+                        provided, __getitem__ skips HDF5 reads entirely —
+                        ~5–10× speedup. Use HybridDataset.preload_X() to
+                        build it once and share across train/val/test.
     """
 
     def __init__(
@@ -109,6 +114,7 @@ class HybridDataset(Dataset):
         normalize: bool = True,
         deterministic: bool = False,
         seed: int = 0,
+        preloaded_X: Optional[np.ndarray] = None,
     ) -> None:
         assert split in ("train", "val", "test"), (
             f"split must be 'train', 'val', or 'test'; got {split!r}"
@@ -157,7 +163,8 @@ class HybridDataset(Dataset):
                 label = window_blocks[-1][2] / 100.0
                 self._samples.append((battery, row_lists, label))
 
-        # Lazy file handle
+        # In-memory dataset (preferred) or lazy HDF5 fallback
+        self._X_mem: Optional[np.ndarray] = preloaded_X
         self._file: Optional[h5py.File] = None
 
         # Normalization
@@ -213,11 +220,21 @@ class HybridDataset(Dataset):
         if self._file is None:
             self._file = h5py.File(self.h5_path, "r")
 
+    @staticmethod
+    def preload_X(h5_path: str) -> np.ndarray:
+        """Load the full X dataset into RAM once.
+
+        ~1.52 GB for 450K × 301 × 3 × float32. Pass the returned array as
+        `preloaded_X` to all three (train/val/test) Datasets to skip HDF5
+        reads in the training loop.
+        """
+        with h5py.File(h5_path, "r") as f:
+            return f["X"][:]
+
     def __len__(self) -> int:
         return len(self._samples)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        self._open()
         battery, row_lists, label = self._samples[idx]
 
         if self.deterministic:
@@ -226,22 +243,32 @@ class HybridDataset(Dataset):
             rng = np.random.default_rng()
 
         K = self.k_steps
-        # Pre-allocate output (W, K, 301, 3)
         out = np.empty((self.window, K, SEQ_LEN, N_CHANNELS), dtype=np.float32)
-        for w, rows in enumerate(row_lists):
-            n_avail = len(rows)
-            if n_avail >= K:
-                pick = rng.choice(n_avail, size=K, replace=False)
-                sampled_rows = np.sort(rows[pick])
-                out[w] = self._file["X"][sampled_rows.tolist()]
-            else:
-                # Block has fewer than K steps. Read each unique row once
-                # (h5py requires strictly increasing indices, no duplicates),
-                # then expand to K with replacement in numpy.
-                unique_rows = np.sort(rows)
-                unique_data = self._file["X"][unique_rows.tolist()]   # (n_avail, 301, 3)
-                pick = rng.integers(0, n_avail, size=K)
-                out[w] = unique_data[pick]
+
+        if self._X_mem is not None:
+            # Fast path: index directly into the in-memory tensor.
+            X = self._X_mem
+            for w, rows in enumerate(row_lists):
+                n_avail = len(rows)
+                if n_avail >= K:
+                    pick = rng.choice(n_avail, size=K, replace=False)
+                else:
+                    pick = rng.integers(0, n_avail, size=K)
+                out[w] = X[rows[pick]]
+        else:
+            # Lazy HDF5 path (slower; used when preloaded_X not provided).
+            self._open()
+            for w, rows in enumerate(row_lists):
+                n_avail = len(rows)
+                if n_avail >= K:
+                    pick = rng.choice(n_avail, size=K, replace=False)
+                    sampled_rows = np.sort(rows[pick])
+                    out[w] = self._file["X"][sampled_rows.tolist()]
+                else:
+                    unique_rows = np.sort(rows)
+                    unique_data = self._file["X"][unique_rows.tolist()]
+                    pick = rng.integers(0, n_avail, size=K)
+                    out[w] = unique_data[pick]
 
         if self.normalize:
             out = (out - self.norm_mean) / (self.norm_std + 1e-8)
